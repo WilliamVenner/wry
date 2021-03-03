@@ -1,12 +1,9 @@
 //! [`WebView`] struct and associated types.
 
-use crate::application::{RpcRequest, RpcResponse, WindowProxy};
+use crate::application::{RpcRequest, RpcResponse};
 use crate::Result;
 
-use std::sync::{
-    mpsc::{channel, Receiver, Sender},
-    Arc,
-};
+use std::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(not(target_os = "linux"))]
 use std::{
     collections::hash_map::DefaultHasher,
@@ -40,6 +37,8 @@ pub(crate) static CALLBACKS: Lazy<
     Mutex::new(m)
 });
 
+//static RPC_HANDLER: OnceCell<RpcHandler> = OnceCell::new();
+
 #[derive(Debug, Serialize, Deserialize)]
 struct RPC {
     id: i32,
@@ -54,7 +53,7 @@ use winit::platform::windows::WindowExtWindows;
 #[cfg(not(target_os = "linux"))]
 use winit::window::Window;
 
-pub type RpcHandler = Box<dyn Fn(&WindowProxy, RpcRequest) -> Option<RpcResponse> + Send + Sync>;
+pub type RpcHandler = Box<dyn Fn(RpcRequest) -> Option<RpcResponse> + Send>;
 
 /// Builder type of [`WebView`].
 ///
@@ -70,7 +69,7 @@ pub struct WebViewBuilder {
     url: Option<Url>,
     window_id: i64,
     custom_protocol: Option<(String, Box<dyn Fn(&str) -> Result<Vec<u8>>>)>,
-    rpc_handler: Option<(WindowProxy, Arc<RpcHandler>)>,
+    rpc_handler: Option<RpcHandler>,
 }
 
 impl WebViewBuilder {
@@ -180,7 +179,7 @@ impl WebViewBuilder {
     }
 
     /// Set the RPC handler.
-    pub(crate) fn set_rpc_handler(mut self, proxy: WindowProxy, handler: Arc<RpcHandler>) -> Self {
+    pub(crate) fn set_rpc_handler(mut self, handler: RpcHandler) -> Self {
         let js = r#"
             function Rpc() {
                 this._callback = '__rpc__';
@@ -227,7 +226,7 @@ impl WebViewBuilder {
             window.rpc = window.external.rpc = new Rpc();
             "#;
         self.initialization_scripts.push(js.to_string());
-        self.rpc_handler = Some((proxy, handler));
+        self.rpc_handler = Some(handler);
         self
     }
 
@@ -356,7 +355,7 @@ pub(crate) trait WV: Sized {
         url: Option<Url>,
         transparent: bool,
         custom_protocol: Option<(String, F)>,
-        rpc_handler: Option<(WindowProxy, Arc<RpcHandler>)>,
+        rpc_handler: Option<RpcHandler>,
     ) -> Result<Self>;
 
     fn eval(&self, js: &str) -> Result<()>;

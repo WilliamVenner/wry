@@ -32,7 +32,7 @@ impl WV for InnerWebView {
         // canary build. Implement this once it's in official release.
         transparent: bool,
         custom_protocol: Option<(String, F)>,
-        rpc_handler: Option<(WindowProxy, Arc<RpcHandler>)>,
+        rpc_handler: Option<Arc<RpcHandler>>,
     ) -> Result<Self> {
         let controller: Rc<OnceCell<Controller>> = Rc::new(OnceCell::new());
         let mut hasher = DefaultHasher::new();

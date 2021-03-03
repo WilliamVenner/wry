@@ -1,10 +1,9 @@
-use crate::application::{FuncCall, WindowProxy, RPC_CALLBACK_NAME};
+use crate::application::{FuncCall, RPC_CALLBACK_NAME};
 use crate::mimetype::MimeType;
 use crate::webview::{CALLBACKS, WV};
 use crate::{Error, Result, RpcHandler};
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use gdk::RGBA;
 use gio::Cancellable;
@@ -31,7 +30,7 @@ impl WV for InnerWebView {
         url: Option<Url>,
         transparent: bool,
         custom_protocol: Option<(String, F)>,
-        rpc_handler: Option<(WindowProxy, Arc<RpcHandler>)>,
+        rpc_handler: Option<RpcHandler>,
     ) -> Result<Self> {
         // Webview widget
         let manager = UserContentManager::new();
@@ -63,8 +62,8 @@ impl WV for InnerWebView {
 
                                 // Send to an RPC handler
                                 if use_rpc {
-                                    let (proxy, rpc_handler) = rpc_handler.as_ref().unwrap();
-                                    let mut response = rpc_handler(proxy, ev.payload);
+                                    let rpc_handler = rpc_handler.as_ref().unwrap();
+                                    let mut response = rpc_handler(ev.payload);
                                     if let Some(mut response) = response.take() {
                                         if let Some(id) = response.id {
                                             let js = if let Some(error) = response.error.take() {

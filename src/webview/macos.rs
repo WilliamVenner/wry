@@ -38,7 +38,7 @@ impl WV for InnerWebView {
         url: Option<Url>,
         transparent: bool,
         custom_protocol: Option<(String, F)>,
-        rpc_handler: Option<(WindowProxy, Arc<RpcHandler>)>,
+        rpc_handler: Option<Arc<RpcHandler>>,
     ) -> Result<Self> {
         let mut hasher = DefaultHasher::new();
         window.id().hash(&mut hasher);

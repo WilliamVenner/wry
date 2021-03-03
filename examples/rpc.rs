@@ -37,42 +37,44 @@ async function getAsyncRpcResult() {
         ..Default::default()
     };
 
-    // NOTE: must be set before calling add_window().
-    app.set_rpc_handler(Box::new(|proxy, mut req| {
-        let mut response = None;
-        if &req.method == "fullscreen" {
-            if let Some(params) = req.params.take() {
-                if let Some(mut args) = serde_json::from_value::<Vec<bool>>(params).ok() {
-                    if args.len() > 0 {
-                        let flag = args.swap_remove(0);
-                        // NOTE: in the real world we need to reply with an error
-                        let _ = proxy.set_fullscreen(flag);
-                    };
-                    response = Some(RpcResponse::new_result(req.id.take(), None));
+    let proxy = app.add_window_with_configs(
+        attributes,
+        None,
+        None,
+        Some(Box::new(move |mut req| {
+            let mut response = None;
+            if &req.method == "fullscreen" {
+                if let Some(params) = req.params.take() {
+                    if let Some(mut args) = serde_json::from_value::<Vec<bool>>(params).ok() {
+                        if args.len() > 0 {
+                            let flag = args.swap_remove(0);
+                            // NOTE: in the real world we need to reply with an error
+                            //let _ = proxy.set_fullscreen(flag);
+                        };
+                        response = Some(RpcResponse::new_result(req.id.take(), None));
+                    }
+                }
+            } else if &req.method == "send-parameters" {
+                if let Some(params) = req.params.take() {
+                    if let Some(mut args) =
+                        serde_json::from_value::<Vec<MessageParameters>>(params).ok()
+                    {
+                        let result = if args.len() > 0 {
+                            let msg = args.swap_remove(0);
+                            Some(Value::String(format!("Hello, {}!", msg.message)))
+                        } else {
+                            // NOTE: in the real-world we should send an error response here!
+                            None
+                        };
+                        // Must always send a response as this is a `call()`
+                        response = Some(RpcResponse::new_result(req.id.take(), result));
+                    }
                 }
             }
-        } else if &req.method == "send-parameters" {
-            if let Some(params) = req.params.take() {
-                if let Some(mut args) =
-                    serde_json::from_value::<Vec<MessageParameters>>(params).ok()
-                {
-                    let result = if args.len() > 0 {
-                        let msg = args.swap_remove(0);
-                        Some(Value::String(format!("Hello, {}!", msg.message)))
-                    } else {
-                        // NOTE: in the real-world we should send an error response here!
-                        None
-                    };
-                    // Must always send a response as this is a `call()`
-                    response = Some(RpcResponse::new_result(req.id.take(), result));
-                }
-            }
-        }
 
-        response
-    }));
-
-    app.add_window(attributes)?;
+            response
+        })),
+    )?;
 
     app.run();
     Ok(())
