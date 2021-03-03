@@ -1,4 +1,3 @@
-use crate::application::WindowProxy;
 use crate::mimetype::MimeType;
 use crate::webview::{CALLBACKS, RPC, WV};
 use crate::{Result, RpcHandler};
@@ -8,7 +7,6 @@ use std::{
     hash::{Hash, Hasher},
     os::raw::c_void,
     rc::Rc,
-    sync::Arc,
 };
 
 use once_cell::unsync::OnceCell;
@@ -32,7 +30,7 @@ impl WV for InnerWebView {
         // canary build. Implement this once it's in official release.
         transparent: bool,
         custom_protocol: Option<(String, F)>,
-        rpc_handler: Option<Arc<RpcHandler>>,
+        rpc_handler: Option<RpcHandler>,
     ) -> Result<Self> {
         let controller: Rc<OnceCell<Controller>> = Rc::new(OnceCell::new());
         let mut hasher = DefaultHasher::new();

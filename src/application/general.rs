@@ -13,7 +13,7 @@ use winit::{
     window::{Fullscreen, Icon as WinitIcon, Window, WindowAttributes, WindowBuilder},
 };
 
-use std::{collections::HashMap, sync::mpsc::channel, sync::Arc};
+use std::{collections::HashMap, sync::mpsc::channel};
 
 #[cfg(target_os = "windows")]
 use {
@@ -50,6 +50,7 @@ impl AppProxy for InnerApplicationProxy {
         attributes: Attributes,
         callbacks: Option<Vec<Callback>>,
         custom_protocol: Option<CustomProtocol>,
+        rpc_handler: Option<RpcHandler>,
     ) -> Result<WindowId> {
         let (sender, receiver) = channel();
         self.send_message(Message::NewWindow(
@@ -57,6 +58,7 @@ impl AppProxy for InnerApplicationProxy {
             callbacks,
             sender,
             custom_protocol,
+            rpc_handler,
         ))?;
         Ok(receiver.recv()?)
     }
@@ -105,7 +107,6 @@ pub struct InnerApplication {
     webviews: HashMap<WindowId, WebView>,
     event_loop: EventLoop<Message>,
     event_loop_proxy: EventLoopProxy,
-    pub(crate) rpc_handler: Option<Arc<RpcHandler>>,
 }
 
 impl App for InnerApplication {
@@ -119,7 +120,6 @@ impl App for InnerApplication {
             webviews: HashMap::new(),
             event_loop,
             event_loop_proxy: proxy,
-            rpc_handler: None,
         })
     }
 
@@ -128,6 +128,7 @@ impl App for InnerApplication {
         attributes: Attributes,
         callbacks: Option<Vec<Callback>>,
         custom_protocol: Option<CustomProtocol>,
+        rpc_handler: Option<RpcHandler>,
     ) -> Result<Self::Id> {
         let (window_attrs, webview_attrs) = attributes.split();
         let window = _create_window(&self.event_loop, window_attrs)?;
@@ -137,7 +138,7 @@ impl App for InnerApplication {
             webview_attrs,
             callbacks,
             custom_protocol,
-            self.rpc_handler.clone(),
+            rpc_handler,
         )?;
         let id = webview.window().id();
         self.webviews.insert(id, webview);
@@ -153,7 +154,6 @@ impl App for InnerApplication {
     fn run(self) {
         let dispatcher = self.application_proxy();
         let mut windows = self.webviews;
-        let rpc_handler = self.rpc_handler.clone();
         self.event_loop.run(move |event, event_loop, control_flow| {
             *control_flow = ControlFlow::Wait;
 
@@ -175,7 +175,13 @@ impl App for InnerApplication {
                     _ => {}
                 },
                 Event::UserEvent(message) => match message {
-                    Message::NewWindow(attributes, callbacks, sender, custom_protocol) => {
+                    Message::NewWindow(
+                        attributes,
+                        callbacks,
+                        sender,
+                        custom_protocol,
+                        rpc_handler,
+                    ) => {
                         let (window_attrs, webview_attrs) = attributes.split();
                         let window = _create_window(&event_loop, window_attrs).unwrap();
                         sender.send(window.id()).unwrap();
@@ -185,7 +191,7 @@ impl App for InnerApplication {
                             webview_attrs,
                             callbacks,
                             custom_protocol,
-                            rpc_handler.clone(),
+                            rpc_handler,
                         )
                         .unwrap();
                         let id = webview.window().id();
@@ -349,7 +355,7 @@ fn _create_webview(
     attributes: InnerWebViewAttributes,
     callbacks: Option<Vec<Callback>>,
     custom_protocol: Option<CustomProtocol>,
-    rpc_handler: Option<Arc<RpcHandler>>,
+    rpc_handler: Option<RpcHandler>,
 ) -> Result<WebView> {
     let window_id = window.id();
     let rpc_win_id = window_id.clone();
@@ -381,8 +387,7 @@ fn _create_webview(
     }
 
     if let Some(rpc_handler) = rpc_handler {
-        let rpc_proxy = WindowProxy::new(ApplicationProxy { inner: rpc_inner }, rpc_win_id);
-        webview = webview.set_rpc_handler(rpc_proxy, rpc_handler);
+        webview = webview.set_rpc_handler(rpc_handler);
     }
 
     webview = match attributes.url {

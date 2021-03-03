@@ -1,4 +1,3 @@
-use crate::application::WindowProxy;
 use crate::mimetype::MimeType;
 use crate::webview::{CALLBACKS, RPC, WV};
 use crate::{Result, RpcHandler};
@@ -10,7 +9,6 @@ use std::{
     os::raw::c_char,
     ptr::null,
     slice, str,
-    sync::Arc,
 };
 
 use cocoa::appkit::{NSView, NSViewHeightSizable, NSViewWidthSizable};
@@ -38,7 +36,7 @@ impl WV for InnerWebView {
         url: Option<Url>,
         transparent: bool,
         custom_protocol: Option<(String, F)>,
-        rpc_handler: Option<Arc<RpcHandler>>,
+        rpc_handler: Option<RpcHandler>,
     ) -> Result<Self> {
         let mut hasher = DefaultHasher::new();
         window.id().hash(&mut hasher);
