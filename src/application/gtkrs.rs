@@ -411,7 +411,7 @@ fn _create_webview(
     if let Some(cbs) = callbacks {
         for Callback { name, mut function } in cbs {
             let proxy = proxy.clone();
-            webview = webview.add_callback(&name, move |_, seq, req| {
+            webview = webview.add_callback(&name, move |seq, req| {
                 function(
                     WindowProxy::new(
                         ApplicationProxy {
