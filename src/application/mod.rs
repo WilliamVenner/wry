@@ -56,6 +56,7 @@ pub enum WindowMessage {
   SetIcon(Icon),
   EvaluationScript(String),
   BeginDrag { x: f64, y: f64 },
+  IsMaximized(Sender<bool>),
 }
 
 /// Describes a general message.
@@ -299,6 +300,15 @@ impl WindowProxy {
     self
       .proxy
       .send_message(Message::Window(self.id, WindowMessage::BeginDrag { x, y }))
+  }
+
+  pub fn is_maximized(&self) -> Result<bool> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    self.proxy.send_message(Message::Window(
+      self.id,
+      WindowMessage::IsMaximized(tx),
+    ))?;
+    rx.recv().map_err(|err| crate::Error::ReceiverError(err))
   }
 }
 
