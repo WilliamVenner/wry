@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use crate::{FileDropEvent, FileDropHandler};
+use crate::{FileDropEvent, FileDropHandler, file_drop::FileDropData};
 
 // A silly implementation of file drop handling for Windows!
 // This can be pretty much entirely replaced when WebView2 SDK 1.0.721-prerelease becomes stable.
@@ -182,20 +182,27 @@ impl IDropTarget {
     _pt: *const POINTL,
     pdwEffect: *mut DWORD,
   ) -> HRESULT {
-    let mut paths = Vec::new();
-
     let drop_handler = Self::from_interface(this);
-    let hdrop = Self::collect_paths(pDataObj, &mut paths);
-    drop_handler.hovered_is_valid = hdrop.is_some();
-    drop_handler.cursor_effect = if drop_handler.hovered_is_valid {
-      DROPEFFECT_COPY
+
+    drop_handler.hovered_is_valid = true;
+    drop_handler.cursor_effect = DROPEFFECT_COPY;
+
+    if let Some((_hdrop, paths)) = Self::collect_paths(pDataObj) {
+
+      (drop_handler.listener)(FileDropEvent::Hovered(FileDropData::Paths(paths)));
+
+    } else if let Some(data) = Self::collect_contents(pDataObj) {
+
+      (drop_handler.listener)(FileDropEvent::Hovered(data));
+
     } else {
-      DROPEFFECT_NONE
-    };
+
+      drop_handler.hovered_is_valid = false;
+      drop_handler.cursor_effect = DROPEFFECT_NONE;
+
+    }
+
     *pdwEffect = drop_handler.cursor_effect;
-
-    (drop_handler.listener)(FileDropEvent::Hovered(paths));
-
     S_OK
   }
 
@@ -227,15 +234,17 @@ impl IDropTarget {
     _pt: *const POINTL,
     _pdwEffect: *mut DWORD,
   ) -> HRESULT {
-    let mut paths = Vec::new();
-
     let drop_handler = Self::from_interface(this);
-    let hdrop = Self::collect_paths(pDataObj, &mut paths);
-    if let Some(hdrop) = hdrop {
-      shellapi::DragFinish(hdrop);
-    }
+    if let Some((hdrop, paths)) = Self::collect_paths(pDataObj) {
 
-    (drop_handler.listener)(FileDropEvent::Dropped(paths));
+      shellapi::DragFinish(hdrop);
+      (drop_handler.listener)(FileDropEvent::Dropped(FileDropData::Paths(paths)));
+
+    } else if let Some(data) = Self::collect_contents(pDataObj) {
+
+      (drop_handler.listener)(FileDropEvent::Dropped(data));
+
+    }
 
     S_OK
   }
@@ -246,8 +255,7 @@ impl IDropTarget {
 
   unsafe fn collect_paths(
     data_obj: *const IDataObject,
-    paths: &mut Vec<PathBuf>,
-  ) -> Option<shellapi::HDROP> {
+  ) -> Option<(shellapi::HDROP, Vec<PathBuf>)> {
     use winapi::{
       shared::{
         winerror::{DV_E_FORMATETC, SUCCEEDED},
@@ -277,6 +285,7 @@ impl IDropTarget {
       // The second parameter (0xFFFFFFFF) instructs the function to return the item count
       let item_count = DragQueryFileW(hdrop, 0xFFFFFFFF, ptr::null_mut(), 0);
 
+      let mut paths = Vec::new();
       for i in 0..item_count {
         // Get the length of the path string NOT including the terminating null character.
         // Previously, this was using a fixed size array of MAX_PATH length, but the
@@ -292,11 +301,67 @@ impl IDropTarget {
         paths.push(OsString::from_wide(&path_buf[0..character_count]).into());
       }
 
-      return Some(hdrop);
+      return Some((hdrop, paths));
     } else if get_data_result == DV_E_FORMATETC {
       // If the dropped item is not a file this error will occur.
       // In this case it is OK to return without taking further action.
       log::warn!("Error occured while processing dropped/hovered item: item is not a file.");
+      return None;
+    } else {
+      log::warn!("Unexpected error occured while processing dropped/hovered item.");
+      return None;
+    }
+  }
+
+  unsafe fn collect_contents(
+    data_obj: *const IDataObject
+  ) -> Option<FileDropData> {
+    use winapi::{
+      shared::{
+        winerror::{DV_E_FORMATETC, SUCCEEDED},
+        wtypes::{CLIPFORMAT, DVASPECT_CONTENT},
+        minwindef::HGLOBAL
+      },
+      um::{
+        objidl::{FORMATETC, TYMED_HGLOBAL},
+        winuser::CF_UNICODETEXT,
+        winbase::{GlobalFree, GlobalSize, GlobalLock, GlobalUnlock},
+      },
+    };
+
+    let mut drop_format = FORMATETC {
+      cfFormat: CF_UNICODETEXT as CLIPFORMAT,
+      ptd: ptr::null(),
+      dwAspect: DVASPECT_CONTENT,
+      lindex: -1,
+      tymed: TYMED_HGLOBAL,
+    };
+
+    let mut medium = std::mem::zeroed();
+    let get_data_result = (*data_obj).GetData(&mut drop_format, &mut medium);
+    if SUCCEEDED(get_data_result) {
+      let hglobal: HGLOBAL = *(*medium.u).hGlobal();
+      let size = GlobalSize(hglobal);
+      let lock = GlobalLock(hglobal);
+
+      if lock.is_null() {
+        log::warn!("Error occured while processing dropped/hovered item: failed to acquire lock to global item.");
+        return None;
+      }
+
+      let wide_data = std::slice::from_raw_parts(lock as *const u16, size / 2);
+      let data = match String::from_utf16(&wide_data[0..wide_data.len()-1]) {
+        Ok(utf8_str) => FileDropData::Unicode(utf8_str),
+        Err(_) => FileDropData::Binary(std::slice::from_raw_parts(lock as *const u8, size).into()),
+      };
+      
+      if GlobalUnlock(hglobal) == 0 {
+        GlobalFree(hglobal);
+      }
+
+      return Some(data);
+    } else if get_data_result == DV_E_FORMATETC {
+      log::warn!("Error occured while processing dropped/hovered item: item is not a recognizable format.");
       return None;
     } else {
       log::warn!("Unexpected error occured while processing dropped/hovered item.");
