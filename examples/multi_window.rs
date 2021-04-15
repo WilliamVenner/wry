@@ -1,3 +1,7 @@
+// Copyright 2019-2021 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
 use serde_json::Value;
 use wry::{Application, Attributes, Result, RpcRequest, WindowProxy};
 
@@ -26,7 +30,7 @@ fn main() -> Result<()> {
     None
   });
 
-  let window_proxy = app.add_window_with_configs(attributes, Some(handler), None, None)?;
+  let window_proxy = app.add_window_with_configs(attributes, Some(handler), vec![], None)?;
   let app_proxy = app.application_proxy();
   std::thread::spawn(move || {
     let mut count = 1;

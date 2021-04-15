@@ -1,3 +1,7 @@
+// Copyright 2019-2021 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
 use std::{path::PathBuf, rc::Rc};
 
 use gdk::RGBA;
@@ -12,7 +16,7 @@ use webkit2gtk::{
 };
 
 use crate::{
-  webview::{mimetype::MimeType, FileDropHandler, WV},
+  webview::{mimetype::MimeType, FileDropHandler},
   Error, Result, RpcHandler,
 };
 
@@ -22,15 +26,13 @@ pub struct InnerWebView {
   webview: Rc<WebView>,
 }
 
-impl WV for InnerWebView {
-  type Window = Window;
-
-  fn new<F: 'static + Fn(&str) -> Result<Vec<u8>>>(
+impl InnerWebView {
+  pub fn new<F: 'static + Fn(&str) -> Result<Vec<u8>>>(
     window: &Window,
     scripts: Vec<String>,
     url: Option<Url>,
     transparent: bool,
-    custom_protocol: Option<(String, F)>,
+    custom_protocols: Vec<(String, F)>,
     rpc_handler: Option<RpcHandler>,
     file_drop_handler: Option<FileDropHandler>,
     _user_data_path: Option<PathBuf>,
@@ -84,7 +86,6 @@ impl WV for InnerWebView {
 
       debug_assert_eq!(
         {
-          settings.set_enable_write_console_messages_to_stdout(true);
           settings.set_enable_developer_extras(true);
         },
         ()
@@ -119,7 +120,7 @@ impl WV for InnerWebView {
     }
 
     // Custom protocol
-    if let Some((name, handler)) = custom_protocol {
+    for (name, handler) in custom_protocols {
       context
         .get_security_manager()
         .ok_or(Error::MissingManager)?
@@ -156,14 +157,12 @@ impl WV for InnerWebView {
     Ok(w)
   }
 
-  fn eval(&self, js: &str) -> Result<()> {
+  pub fn eval(&self, js: &str) -> Result<()> {
     let cancellable: Option<&Cancellable> = None;
     self.webview.run_javascript(js, cancellable, |_| ());
     Ok(())
   }
-}
 
-impl InnerWebView {
   fn init(&self, js: &str) -> Result<()> {
     if let Some(manager) = self.webview.get_user_content_manager() {
       let script = UserScript::new(

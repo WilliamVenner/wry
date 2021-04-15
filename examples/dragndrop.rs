@@ -1,3 +1,7 @@
+// Copyright 2019-2021 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
 use wry::{Application, Attributes, Result};
 
 static TEST_HTML: &str = r#"data:text/html,
@@ -15,7 +19,7 @@ fn main() -> Result<()> {
       ..Default::default()
     },
     None,
-    None,
+    vec![],
     Some(Box::new(|_, data| {
       println!("Window 1: {:?}", data);
       false // Returning true will block the OS default behaviour.

@@ -1,3 +1,7 @@
+// Copyright 2019-2021 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
 use std::path::PathBuf;
 
 use crate::WindowProxy;
@@ -39,7 +43,7 @@ pub enum FileDropEvent {
 ///       // Return `true` to block the default file drop behavior of the OS.
 ///       false
 ///     });
-///     app.add_window_with_configs(Default::default(), None, None, Some(file_drop))?;
+///     app.add_window_with_configs(Default::default(), None, vec![], Some(file_drop))?;
 ///     app.run();
 ///     Ok(())
 /// }

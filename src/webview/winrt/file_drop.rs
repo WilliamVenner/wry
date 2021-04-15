@@ -1,3 +1,7 @@
+// Copyright 2019-2021 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
 use windows::{Abi, Interface};
 
 use windows_webview2::Windows::Win32::{
@@ -279,16 +283,10 @@ impl DropTarget {
     } else if get_data_result.0 == SystemServices::DV_E_FORMATETC.0 {
       // If the dropped item is not a file this error will occur.
       // In this case it is OK to return without taking further action.
-      debug_assert!(
-        false,
-        "Error occured while processing dropped/hovered item: item is not a file."
-      );
+      log::warn!("Error occured while processing dropped/hovered item: item is not a file.");
       return None;
     } else {
-      debug_assert!(
-        false,
-        "Unexpected error occured while processing dropped/hovered item."
-      );
+      log::warn!("Unexpected error occured while processing dropped/hovered item.");
       return None;
     }
   }

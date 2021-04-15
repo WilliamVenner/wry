@@ -1,3 +1,7 @@
+// Copyright 2019-2021 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use wry::{Application, Attributes, Result, RpcRequest, RpcResponse, WindowProxy};
@@ -67,7 +71,7 @@ async function getAsyncRpcResult() {
     response
   });
 
-  app.add_window_with_configs(attributes, Some(handler), None, None)?;
+  app.add_window_with_configs(attributes, Some(handler), vec![], None)?;
 
   app.run();
   Ok(())

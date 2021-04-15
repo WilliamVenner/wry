@@ -1,3 +1,7 @@
+// Copyright 2019-2021 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
 #[cfg(not(target_os = "linux"))]
 mod general;
 #[cfg(not(target_os = "linux"))]
@@ -67,7 +71,7 @@ pub enum Message {
     Sender<WindowId>,
     Option<WindowFileDropHandler>,
     Option<WindowRpcHandler>,
-    Option<CustomProtocol>,
+    Vec<CustomProtocol>,
   ),
 }
 
@@ -88,7 +92,7 @@ impl ApplicationProxy {
   }
   /// Adds another WebView window to the application. Returns its [`WindowProxy`] after created.
   pub fn add_window(&self, attributes: Attributes) -> Result<WindowProxy> {
-    let id = self.inner.add_window(attributes, None, None, None)?;
+    let id = self.inner.add_window(attributes, None, None, vec![])?;
     Ok(WindowProxy::new(self.clone(), id))
   }
 
@@ -97,12 +101,12 @@ impl ApplicationProxy {
     &self,
     attributes: Attributes,
     rpc_handler: Option<WindowRpcHandler>,
-    custom_protocol: Option<CustomProtocol>,
+    custom_protocols: Vec<CustomProtocol>,
     file_drop_handler: Option<WindowFileDropHandler>,
   ) -> Result<WindowProxy> {
     let id = self
       .inner
-      .add_window(attributes, file_drop_handler, rpc_handler, custom_protocol)?;
+      .add_window(attributes, file_drop_handler, rpc_handler, custom_protocols)?;
     Ok(WindowProxy::new(self.clone(), id))
   }
 
@@ -110,18 +114,6 @@ impl ApplicationProxy {
   pub fn listen_event(&self) -> Result<Event> {
     self.inner.listen_event()
   }
-}
-
-trait AppProxy {
-  fn send_message(&self, message: Message) -> Result<()>;
-  fn add_window(
-    &self,
-    attributes: Attributes,
-    file_drop_handler: Option<WindowFileDropHandler>,
-    rpc_handler: Option<WindowRpcHandler>,
-    custom_protocol: Option<CustomProtocol>,
-  ) -> Result<WindowId>;
-  fn listen_event(&self) -> Result<Event>;
 }
 
 /// A proxy to customize its corresponding WebView window.
@@ -346,7 +338,7 @@ impl Application {
   ///
   /// To create a default window, you could just pass `.add_window(Default::default(), None)`.
   pub fn add_window(&mut self, attributes: Attributes) -> Result<WindowProxy> {
-    let id = self.inner.create_webview(attributes, None, None, None)?;
+    let id = self.inner.create_webview(attributes, None, None, vec![])?;
     Ok(self.window_proxy(id))
   }
 
@@ -362,13 +354,13 @@ impl Application {
     &mut self,
     attributes: Attributes,
     rpc_handler: Option<WindowRpcHandler>,
-    custom_protocol: Option<CustomProtocol>,
+    custom_protocols: Vec<CustomProtocol>,
     file_drop_handler: Option<WindowFileDropHandler>,
   ) -> Result<WindowProxy> {
     let id =
       self
         .inner
-        .create_webview(attributes, file_drop_handler, rpc_handler, custom_protocol)?;
+        .create_webview(attributes, file_drop_handler, rpc_handler, custom_protocols)?;
     Ok(self.window_proxy(id))
   }
 
@@ -391,23 +383,4 @@ impl Application {
   pub fn run(self) {
     self.inner.run()
   }
-}
-
-trait App: Sized {
-  type Proxy: AppProxy;
-  type Id: Copy;
-
-  fn new() -> Result<Self>;
-
-  fn create_webview(
-    &mut self,
-    attributes: Attributes,
-    file_drop_handler: Option<WindowFileDropHandler>,
-    rpc_handler: Option<WindowRpcHandler>,
-    custom_protocol: Option<CustomProtocol>,
-  ) -> Result<Self::Id>;
-
-  fn application_proxy(&self) -> Self::Proxy;
-
-  fn run(self);
 }

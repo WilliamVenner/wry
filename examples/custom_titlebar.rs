@@ -1,3 +1,7 @@
+// Copyright 2019-2021 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
 use wry::{Application, Attributes, Result, RpcRequest, WindowProxy, WindowRpcHandler};
 
 fn main() -> Result<()> {
@@ -97,7 +101,7 @@ fn main() -> Result<()> {
     None
   });
 
-  let _window1 = app.add_window_with_configs(attributes, Some(handler), None, None)?;
+  let _window1 = app.add_window_with_configs(attributes, Some(handler), vec![], None)?;
 
   app.run();
   Ok(())
