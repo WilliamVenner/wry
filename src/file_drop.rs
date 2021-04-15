@@ -10,11 +10,25 @@ use crate::WindowProxy;
 #[derive(Debug, Serialize, Clone)]
 pub enum FileDropEvent {
   /// The file(s) have been dragged onto the window, but have not been dropped yet.
-  Hovered(Vec<PathBuf>),
+  Hovered(FileDropData),
   /// The file(s) have been dropped onto the window.
-  Dropped(Vec<PathBuf>),
+  Dropped(FileDropData),
   /// The file drop was aborted.
   Cancelled,
+}
+
+#[derive(Debug, Serialize, Clone)]
+/// The type of data that was dropped onto the webview.
+pub enum FileDropData {
+  /// A list of file paths.
+  Paths(Vec<PathBuf>),
+
+  /// A valid UTF-8 string.
+  /// Some binary data is actually valid UTF-8, so this may be unexpected in some cases.
+  Unicode(String),
+
+  /// Raw binary data that could not be converted to UTF-8.
+  Binary(Vec<u8>)
 }
 
 /// A listener closure to process incoming [`FileDropEvent`] of the webview.
