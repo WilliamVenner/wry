@@ -21,7 +21,7 @@ pub(crate) use attributes::{InnerWebViewAttributes, InnerWindowAttributes};
 
 use crate::{Result, WindowFileDropHandler};
 
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 
 pub enum Event {
   WindowEvent {
@@ -60,6 +60,7 @@ pub enum WindowMessage {
   SetIcon(Icon),
   EvaluationScript(String),
   BeginDrag { x: f64, y: f64 },
+  IsMaximized(SyncSender<bool>),
 }
 
 /// Describes a general message.
@@ -291,6 +292,14 @@ impl WindowProxy {
     self
       .proxy
       .send_message(Message::Window(self.id, WindowMessage::BeginDrag { x, y }))
+  }
+
+  pub fn is_maximized(&self) -> bool {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    if let Err(_) = self.proxy.send_message(Message::Window(self.id, WindowMessage::IsMaximized(tx))) {
+      return false;
+    }
+    rx.recv().unwrap_or(false)
   }
 }
 

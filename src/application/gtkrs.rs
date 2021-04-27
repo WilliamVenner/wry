@@ -349,6 +349,9 @@ async fn process_messages(
             WindowMessage::BeginDrag { x, y } => {
               window.begin_move_drag(1, x as i32, y as i32, 0);
             }
+            WindowMessage::IsMaximized(tx) => {
+              tx.send(window.get_property_is_maximized()).ok();
+            }
           }
         }
       }

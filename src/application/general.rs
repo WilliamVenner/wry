@@ -330,6 +330,9 @@ impl InnerApplication {
                 WindowMessage::BeginDrag { x: _, y: _ } => {
                   window.drag_window().unwrap();
                 }
+                WindowMessage::IsMaximized(tx) => {
+                  tx.send(window.is_maximized()).ok();
+                }
               }
             }
           }
