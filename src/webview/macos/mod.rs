@@ -6,28 +6,29 @@ use std::{
   ffi::{c_void, CStr},
   os::raw::c_char,
   path::PathBuf,
-  ptr::null,
+  ptr::{null, null_mut},
+  rc::Rc,
   slice, str,
 };
 
 use cocoa::{
   appkit::{NSView, NSViewHeightSizable, NSViewWidthSizable},
-  base::id,
+  base::{id, YES},
 };
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 use objc::{
   declare::ClassDecl,
-  runtime::{Object, Sel},
+  runtime::{Class, Object, Sel},
 };
 use objc_id::Id;
 use url::Url;
-use winit::{platform::macos::WindowExtMacOS, window::Window};
 
 use file_drop::{add_file_drop_methods, set_file_drop_handler};
 
 use crate::{
-  webview::{mimetype::MimeType, FileDropHandler},
-  Result, RpcHandler,
+  application::{platform::macos::WindowExtMacOS, window::Window},
+  webview::{mimetype::MimeType, FileDropEvent, RpcRequest, RpcResponse},
+  Result,
 };
 
 mod file_drop;
@@ -35,30 +36,43 @@ mod file_drop;
 pub struct InnerWebView {
   webview: Id<Object>,
   manager: id,
+  rpc_handler_ptr: *mut (
+    Box<dyn Fn(&Window, RpcRequest) -> Option<RpcResponse>>,
+    Rc<Window>,
+  ),
+  file_drop_ptr: *mut (Box<dyn Fn(&Window, FileDropEvent) -> bool>, Rc<Window>),
+  protocol_ptrs: Vec<*mut (Box<dyn Fn(&Window, &str) -> Result<Vec<u8>>>, Rc<Window>)>,
 }
 
 impl InnerWebView {
-  pub fn new<F: 'static + Fn(&str) -> Result<Vec<u8>>>(
-    window: &Window,
+  pub fn new(
+    window: Rc<Window>,
     scripts: Vec<String>,
     url: Option<Url>,
     transparent: bool,
-    custom_protocols: Vec<(String, F)>,
-    rpc_handler: Option<RpcHandler>,
-    file_drop_handler: Option<FileDropHandler>,
-    _user_data_path: Option<PathBuf>,
+    custom_protocols: Vec<(
+      String,
+      Box<dyn Fn(&Window, &str) -> Result<Vec<u8>> + 'static>,
+    )>,
+    rpc_handler: Option<Box<dyn Fn(&Window, RpcRequest) -> Option<RpcResponse>>>,
+    file_drop_handler: Option<Box<dyn Fn(&Window, FileDropEvent) -> bool>>,
+    _data_directory: Option<PathBuf>,
   ) -> Result<Self> {
     // Function for rpc handler
     extern "C" fn did_receive(this: &Object, _: Sel, _: id, msg: id) {
       // Safety: objc runtime calls are unsafe
       unsafe {
         let function = this.get_ivar::<*mut c_void>("function");
-        let function: &mut RpcHandler = std::mem::transmute(*function);
+        let function = &mut *(*function
+          as *mut (
+            Box<dyn for<'r> Fn(&'r Window, RpcRequest) -> Option<RpcResponse>>,
+            Rc<Window>,
+          ));
         let body: id = msg_send![msg, body];
         let utf8: *const c_char = msg_send![body, UTF8String];
         let js = CStr::from_ptr(utf8).to_str().expect("Invalid UTF8 string");
 
-        match super::rpc_proxy(js.to_string(), function) {
+        match super::rpc_proxy(&function.1, js.to_string(), &function.0) {
           Ok(result) => {
             if let Some(ref script) = result {
               let wv: id = msg_send![msg, webView];
@@ -78,7 +92,11 @@ impl InnerWebView {
     extern "C" fn start_task(this: &Object, _: Sel, _webview: id, task: id) {
       unsafe {
         let function = this.get_ivar::<*mut c_void>("function");
-        let function: &mut Box<dyn Fn(&str) -> Result<Vec<u8>>> = std::mem::transmute(*function);
+        let function = &mut *(*function
+          as *mut (
+            Box<dyn for<'r, 's> Fn(&'r Window, &'s str) -> Result<Vec<u8>>>,
+            Rc<Window>,
+          ));
 
         // Get url request
         let request: id = msg_send![task, request];
@@ -90,7 +108,7 @@ impl InnerWebView {
         let uri = nsstring.to_str();
 
         // Send response
-        if let Ok(content) = function(uri) {
+        if let Ok(content) = function.0(&function.1, uri) {
           let mime = MimeType::parse(&content, uri);
           let nsurlresponse: id = msg_send![class!(NSURLResponse), alloc];
           let response: id = msg_send![nsurlresponse, initWithURL:url MIMEType:NSString::new(&mime)
@@ -114,6 +132,7 @@ impl InnerWebView {
     unsafe {
       // Config and custom protocol
       let config: id = msg_send![class!(WKWebViewConfiguration), new];
+      let mut protocol_ptrs = Vec::new();
       for (name, function) in custom_protocols {
         let scheme_name = format!("{}URLSchemeHandler", name);
         let cls = ClassDecl::new(&scheme_name, class!(NSObject));
@@ -130,12 +149,14 @@ impl InnerWebView {
             );
             cls.register()
           }
-          None => class!(scheme_name),
+          None => Class::get(&scheme_name).expect("Failed to get the class definition"),
         };
         let handler: id = msg_send![cls, new];
-        let function: Box<Box<dyn Fn(&str) -> Result<Vec<u8>>>> = Box::new(Box::new(function));
+        let w = window.clone();
+        let function = Box::into_raw(Box::new((function, w)));
+        protocol_ptrs.push(function);
 
-        (*handler).set_ivar("function", Box::into_raw(function) as *mut _ as *mut c_void);
+        (*handler).set_ivar("function", function as *mut _ as *mut c_void);
         let () = msg_send![config, setURLSchemeHandler:handler forURLScheme:NSString::new(&name)];
       }
 
@@ -170,13 +191,12 @@ impl InnerWebView {
       }
 
       // Resize
-      let size = window.inner_size().to_logical(window.scale_factor());
-      let rect = CGRect::new(&CGPoint::new(0., 0.), &CGSize::new(size.width, size.height));
-      let _: () = msg_send![webview, initWithFrame:rect configuration:config];
+      let zero = CGRect::new(&CGPoint::new(0., 0.), &CGSize::new(0., 0.));
+      let _: () = msg_send![webview, initWithFrame:zero configuration:config];
       webview.setAutoresizingMask_(NSViewHeightSizable | NSViewWidthSizable);
 
       // Message handler
-      if let Some(rpc_handler) = rpc_handler {
+      let rpc_handler_ptr = if let Some(rpc_handler) = rpc_handler {
         let cls = ClassDecl::new("WebViewDelegate", class!(NSObject));
         let cls = match cls {
           Some(mut cls) => {
@@ -190,21 +210,32 @@ impl InnerWebView {
           None => class!(WebViewDelegate),
         };
         let handler: id = msg_send![cls, new];
-        let function: Box<RpcHandler> = Box::new(rpc_handler);
+        let rpc_handler_ptr = Box::into_raw(Box::new((rpc_handler, window.clone())));
 
-        (*handler).set_ivar("function", Box::into_raw(function) as *mut _ as *mut c_void);
+        (*handler).set_ivar("function", rpc_handler_ptr as *mut _ as *mut c_void);
         let external = NSString::new("external");
         let _: () = msg_send![manager, addScriptMessageHandler:handler name:external];
-      }
+        rpc_handler_ptr
+      } else {
+        null_mut()
+      };
 
       // File drop handling
-      if let Some(file_drop_handler) = file_drop_handler {
-        set_file_drop_handler(webview, file_drop_handler)
+      let file_drop_ptr = match file_drop_handler {
+        // if we have a file_drop_handler defined, use the defined handler
+        Some(file_drop_handler) => {
+          set_file_drop_handler(webview, window.clone(), file_drop_handler)
+        }
+        // prevent panic by using a blank handler
+        None => set_file_drop_handler(webview, window.clone(), Box::new(|_, _| false)),
       };
 
       let w = Self {
         webview: Id::from_ptr(webview),
         manager,
+        rpc_handler_ptr,
+        file_drop_ptr,
+        protocol_ptrs,
       };
 
       // Initialize scripts
@@ -256,9 +287,11 @@ impl InnerWebView {
           w.navigate(url.as_str());
         }
       }
-
-      let view = window.ns_view() as id;
-      view.addSubview_(webview);
+      // Tell the webview we use layers
+      let _: () = msg_send![webview, setWantsLayer: YES];
+      // Inject the web view into the window as main content
+      let ns_window = window.ns_window() as id;
+      let _: () = msg_send![ns_window, setContentView: webview];
 
       Ok(w)
     }
@@ -298,6 +331,27 @@ impl InnerWebView {
     unsafe {
       let empty: id = msg_send![class!(NSURL), URLWithString: NSString::new("")];
       let () = msg_send![self.webview, loadHTMLString:NSString::new(url) baseURL:empty];
+    }
+  }
+}
+
+impl Drop for InnerWebView {
+  fn drop(&mut self) {
+    // We need to drop handler closures here
+    unsafe {
+      if !self.rpc_handler_ptr.is_null() {
+        let _ = Box::from_raw(self.rpc_handler_ptr);
+      }
+
+      if !self.file_drop_ptr.is_null() {
+        let _ = Box::from_raw(self.file_drop_ptr);
+      }
+
+      for ptr in self.protocol_ptrs.iter() {
+        if !ptr.is_null() {
+          let _ = Box::from_raw(*ptr);
+        }
+      }
     }
   }
 }

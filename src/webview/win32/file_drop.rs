@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use crate::{FileDropEvent, FileDropHandler};
+use crate::webview::FileDropEvent;
 
 // A silly implementation of file drop handling for Windows!
 // This can be pretty much entirely replaced when WebView2 SDK 1.0.721-prerelease becomes stable.
@@ -19,6 +19,8 @@ use std::{
 };
 
 use winapi::shared::windef::HWND;
+
+use crate::application::window::Window;
 
 pub(crate) struct FileDropController {
   drop_targets: Vec<*mut IDropTarget>,
@@ -41,17 +43,29 @@ impl FileDropController {
     }
   }
 
-  pub(crate) fn listen(&mut self, hwnd: HWND, handler: FileDropHandler) {
+  pub(crate) fn listen(
+    &mut self,
+    hwnd: HWND,
+    window: Rc<Window>,
+    handler: Box<dyn Fn(&Window, FileDropEvent) -> bool>,
+  ) {
     let listener = Rc::new(handler);
 
     // Enumerate child windows to find the WebView2 "window" and override!
-    enumerate_child_windows(hwnd, |hwnd| self.inject(hwnd, listener.clone()));
+    enumerate_child_windows(hwnd, |hwnd| {
+      self.inject(hwnd, window.clone(), listener.clone())
+    });
   }
 
-  fn inject(&mut self, hwnd: HWND, listener: Rc<FileDropHandler>) -> bool {
+  fn inject(
+    &mut self,
+    hwnd: HWND,
+    window: Rc<Window>,
+    listener: Rc<dyn Fn(&Window, FileDropEvent) -> bool>,
+  ) -> bool {
     // Safety: WinAPI calls are unsafe
     unsafe {
-      let file_drop_handler = IDropTarget::new(hwnd, listener);
+      let file_drop_handler = IDropTarget::new(hwnd, window, listener);
       let handler_interface_ptr =
         &mut (*file_drop_handler.data).interface as winapi::um::oleidl::LPDROPTARGET;
 
@@ -87,7 +101,7 @@ unsafe extern "system" fn enumerate_callback(
   hwnd: HWND,
   lparam: winapi::shared::minwindef::LPARAM,
 ) -> winapi::shared::minwindef::BOOL {
-  let closure: &mut &mut dyn FnMut(HWND) -> bool = std::mem::transmute(lparam as *mut c_void);
+  let closure = &mut *(lparam as *mut c_void as *mut &mut dyn FnMut(HWND) -> bool);
   if closure(hwnd) {
     winapi::shared::minwindef::TRUE
   } else {
@@ -118,9 +132,10 @@ use winapi::{
 #[repr(C)]
 struct IDropTargetData {
   pub interface: NativeIDropTarget,
-  listener: Rc<FileDropHandler>,
+  listener: Rc<dyn Fn(&Window, FileDropEvent) -> bool>,
   refcount: AtomicUsize,
-  window: HWND,
+  hwnd: HWND,
+  window: Rc<Window>,
   cursor_effect: DWORD,
   hovered_is_valid: bool, /* If the currently hovered item is not valid there must not be any `HoveredFileCancelled` emitted */
 }
@@ -132,13 +147,18 @@ pub struct IDropTarget {
 
 #[allow(non_snake_case)]
 impl IDropTarget {
-  fn new(window: HWND, listener: Rc<FileDropHandler>) -> IDropTarget {
+  fn new(
+    hwnd: HWND,
+    window: Rc<Window>,
+    listener: Rc<dyn Fn(&Window, FileDropEvent) -> bool>,
+  ) -> IDropTarget {
     let data = Box::new(IDropTargetData {
       listener,
       interface: NativeIDropTarget {
         lpVtbl: &DROP_TARGET_VTBL as *const IDropTargetVtbl,
       },
       refcount: AtomicUsize::new(1),
+      hwnd,
       window,
       cursor_effect: DROPEFFECT_NONE,
       hovered_is_valid: false,
@@ -194,7 +214,7 @@ impl IDropTarget {
     };
     *pdwEffect = drop_handler.cursor_effect;
 
-    (drop_handler.listener)(FileDropEvent::Hovered(paths));
+    (drop_handler.listener)(&drop_handler.window, FileDropEvent::Hovered(paths));
 
     S_OK
   }
@@ -214,7 +234,7 @@ impl IDropTarget {
   pub unsafe extern "system" fn DragLeave(this: *mut NativeIDropTarget) -> HRESULT {
     let drop_handler = Self::from_interface(this);
     if drop_handler.hovered_is_valid {
-      (drop_handler.listener)(FileDropEvent::Cancelled);
+      (drop_handler.listener)(&drop_handler.window, FileDropEvent::Cancelled);
     }
 
     S_OK
@@ -235,7 +255,7 @@ impl IDropTarget {
       shellapi::DragFinish(hdrop);
     }
 
-    (drop_handler.listener)(FileDropEvent::Dropped(paths));
+    (drop_handler.listener)(&drop_handler.window, FileDropEvent::Dropped(paths));
 
     S_OK
   }
@@ -260,7 +280,7 @@ impl IDropTarget {
       },
     };
 
-    let mut drop_format = FORMATETC {
+    let drop_format = FORMATETC {
       cfFormat: CF_HDROP as CLIPFORMAT,
       ptd: ptr::null(),
       dwAspect: DVASPECT_CONTENT,
@@ -269,7 +289,7 @@ impl IDropTarget {
     };
 
     let mut medium = std::mem::zeroed();
-    let get_data_result = (*data_obj).GetData(&mut drop_format, &mut medium);
+    let get_data_result = (*data_obj).GetData(&drop_format, &mut medium);
     if SUCCEEDED(get_data_result) {
       let hglobal = (*medium.u).hGlobal();
       let hdrop = (*hglobal) as shellapi::HDROP;
@@ -292,15 +312,15 @@ impl IDropTarget {
         paths.push(OsString::from_wide(&path_buf[0..character_count]).into());
       }
 
-      return Some(hdrop);
+      Some(hdrop)
     } else if get_data_result == DV_E_FORMATETC {
       // If the dropped item is not a file this error will occur.
       // In this case it is OK to return without taking further action.
       log::warn!("Error occured while processing dropped/hovered item: item is not a file.");
-      return None;
+      None
     } else {
       log::warn!("Unexpected error occured while processing dropped/hovered item.");
-      return None;
+      None
     }
   }
 }

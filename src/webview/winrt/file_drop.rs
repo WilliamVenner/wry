@@ -12,7 +12,7 @@ use windows_webview2::Windows::Win32::{
   WindowsAndMessaging::{self, HWND, LPARAM},
 };
 
-use crate::{FileDropEvent, FileDropHandler};
+use crate::{application::window::Window, webview::FileDropEvent};
 
 // A silly implementation of file drop handling for Windows!
 // This can be pretty much entirely replaced when WebView2 SDK 1.0.721-prerelease becomes stable.
@@ -24,6 +24,7 @@ use std::{
   mem,
   os::{raw::c_void, windows::ffi::OsStringExt},
   path::PathBuf,
+  ptr::null_mut,
   rc::Rc,
   sync::atomic::{AtomicU32, Ordering},
 };
@@ -52,18 +53,30 @@ impl FileDropController {
     }
   }
 
-  pub(crate) fn listen(&mut self, hwnd: HWND, handler: FileDropHandler) {
+  pub(crate) fn listen(
+    &mut self,
+    hwnd: HWND,
+    window: Rc<Window>,
+    handler: Box<dyn Fn(&Window, FileDropEvent) -> bool>,
+  ) {
     let listener = Rc::new(handler);
 
     // Enumerate child windows to find the WebView2 "window" and override!
-    enumerate_child_windows(hwnd, |hwnd| self.inject(hwnd, listener.clone()));
+    enumerate_child_windows(hwnd, |hwnd| {
+      self.inject(hwnd, window.clone(), listener.clone())
+    });
   }
 
-  fn inject(&mut self, hwnd: HWND, listener: Rc<FileDropHandler>) -> bool {
+  fn inject(
+    &mut self,
+    hwnd: HWND,
+    window: Rc<Window>,
+    listener: Rc<dyn Fn(&Window, FileDropEvent) -> bool>,
+  ) -> bool {
     // Safety: Win32 calls are unsafe
     unsafe {
       if com::RevokeDragDrop(hwnd).0 != SystemServices::DRAGDROP_E_INVALIDHWND.0 {
-        let mut drop_target = Box::new(DropTarget::new(hwnd, listener));
+        let mut drop_target = Box::new(DropTarget::new(hwnd, window, listener));
         let interface: windows::Result<com::IDropTarget> =
           from_abi(drop_target.as_mut() as *mut _ as *mut _);
         if let Ok(interface) = interface {
@@ -95,7 +108,7 @@ where
 
 extern "system" fn enumerate_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
   unsafe {
-    let closure: &mut &mut dyn FnMut(HWND) -> bool = mem::transmute(lparam.0 as *mut c_void);
+    let closure = &mut *(lparam.0 as *mut c_void as *mut &mut dyn FnMut(HWND) -> bool);
     closure(hwnd).into()
   }
 }
@@ -103,7 +116,7 @@ extern "system" fn enumerate_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
 unsafe fn from_abi<I: Interface>(this: windows::RawPtr) -> windows::Result<I> {
   let unknown = windows::IUnknown::from_abi(this)?;
   unknown.vtable().1(unknown.abi()); // AddRef to balance the Release called in IUnknown::drop
-  Ok(unknown.cast()?)
+  unknown.cast()
 }
 
 // The below code has been ripped from Winit - if only they'd `pub use` this!
@@ -114,20 +127,26 @@ unsafe fn from_abi<I: Interface>(this: windows::RawPtr) -> windows::Result<I> {
 #[repr(C)]
 struct DropTarget {
   vtable: *const IDropTarget_vtable,
-  listener: Rc<FileDropHandler>,
+  listener: Rc<dyn Fn(&Window, FileDropEvent) -> bool>,
   refcount: AtomicU32,
-  window: HWND,
+  hwnd: HWND,
+  window: Rc<Window>,
   cursor_effect: u32,
   hovered_is_valid: bool, /* If the currently hovered item is not valid there must not be any `HoveredFileCancelled` emitted */
 }
 
 #[allow(non_snake_case)]
 impl DropTarget {
-  fn new(window: HWND, listener: Rc<FileDropHandler>) -> DropTarget {
+  fn new(
+    hwnd: HWND,
+    window: Rc<Window>,
+    listener: Rc<dyn Fn(&Window, FileDropEvent) -> bool>,
+  ) -> DropTarget {
     DropTarget {
       vtable: &DROP_TARGET_VTBL,
       listener,
       refcount: AtomicU32::new(1),
+      hwnd,
       window,
       cursor_effect: com::DROPEFFECT_NONE,
       hovered_is_valid: false,
@@ -156,8 +175,7 @@ impl DropTarget {
 
   pub unsafe extern "system" fn AddRef(this: windows::RawPtr) -> u32 {
     let drop_target = Self::from_interface(this);
-    let count = drop_target.refcount.fetch_add(1, Ordering::Release) + 1;
-    count
+    drop_target.refcount.fetch_add(1, Ordering::Release) + 1
   }
 
   pub unsafe extern "system" fn Release(this: windows::RawPtr) -> u32 {
@@ -192,7 +210,7 @@ impl DropTarget {
       };
       *pdwEffect = drop_handler.cursor_effect;
 
-      (drop_handler.listener)(FileDropEvent::Hovered(paths));
+      (drop_handler.listener)(&drop_handler.window, FileDropEvent::Hovered(paths));
     }
 
     windows::ErrorCode::S_OK
@@ -213,7 +231,7 @@ impl DropTarget {
   pub unsafe extern "system" fn DragLeave(this: windows::RawPtr) -> windows::ErrorCode {
     let drop_handler = Self::from_interface(this);
     if drop_handler.hovered_is_valid {
-      (drop_handler.listener)(FileDropEvent::Cancelled);
+      (drop_handler.listener)(&drop_handler.window, FileDropEvent::Cancelled);
     }
 
     windows::ErrorCode::S_OK
@@ -237,7 +255,7 @@ impl DropTarget {
       }
     }
 
-    (drop_handler.listener)(FileDropEvent::Dropped(paths));
+    (drop_handler.listener)(&drop_handler.window, FileDropEvent::Dropped(paths));
 
     windows::ErrorCode::S_OK
   }
@@ -249,7 +267,7 @@ impl DropTarget {
   unsafe fn collect_paths(data_obj: &com::IDataObject, paths: &mut Vec<PathBuf>) -> Option<HDROP> {
     let mut drop_format = com::FORMATETC {
       cfFormat: CLIPBOARD_FORMATS::CF_HDROP.0 as u16,
-      ptd: 0 as *mut _,
+      ptd: null_mut(),
       dwAspect: DVASPECT::DVASPECT_CONTENT.0 as u32,
       lindex: -1,
       tymed: TYMED::TYMED_HGLOBAL.0 as u32,
@@ -262,13 +280,13 @@ impl DropTarget {
       let hdrop = HDROP(hglobal);
 
       // The second parameter (0xFFFFFFFF) instructs the function to return the item count
-      let item_count = shell::DragQueryFileW(hdrop, 0xFFFFFFFF, PWSTR(0 as *mut _), 0);
+      let item_count = shell::DragQueryFileW(hdrop, 0xFFFFFFFF, PWSTR(null_mut()), 0);
 
       for i in 0..item_count {
         // Get the length of the path string NOT including the terminating null character.
         // Previously, this was using a fixed size array of MAX_PATH length, but the
         // Windows API allows longer paths under certain circumstances.
-        let character_count = shell::DragQueryFileW(hdrop, i, PWSTR(0 as *mut _), 0) as usize;
+        let character_count = shell::DragQueryFileW(hdrop, i, PWSTR(null_mut()), 0) as usize;
         let str_len = character_count + 1;
 
         // Fill path_buf with the null-terminated file name
@@ -279,15 +297,15 @@ impl DropTarget {
         paths.push(OsString::from_wide(&path_buf[0..character_count]).into());
       }
 
-      return Some(hdrop);
+      Some(hdrop)
     } else if get_data_result.0 == SystemServices::DV_E_FORMATETC.0 {
       // If the dropped item is not a file this error will occur.
       // In this case it is OK to return without taking further action.
       log::warn!("Error occured while processing dropped/hovered item: item is not a file.");
-      return None;
+      None
     } else {
       log::warn!("Unexpected error occured while processing dropped/hovered item.");
-      return None;
+      None
     }
   }
 }

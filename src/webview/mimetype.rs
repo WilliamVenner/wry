@@ -32,7 +32,7 @@ impl std::fmt::Display for MimeType {
       MimeType::JSONLD => "application/ld+json",
       MimeType::OCTETSTREAM => "application/octet-stream",
       MimeType::RTF => "application/rtf",
-      MimeType::SVG => "image/svg",
+      MimeType::SVG => "image/svg+xml",
     };
     write!(f, "{}", mime)
   }
@@ -41,7 +41,7 @@ impl std::fmt::Display for MimeType {
 impl MimeType {
   /// parse a URI suffix to convert text/plain mimeType to their actual web compatible mimeType.
   pub fn parse_from_uri(uri: &str) -> MimeType {
-    let suffix = uri.split(".").last();
+    let suffix = uri.split('.').last();
     match suffix {
       Some("bin") => Self::OCTETSTREAM,
       Some("css") => Self::CSS,
@@ -62,7 +62,7 @@ impl MimeType {
   }
 
   /// infer mimetype from content (or) URI if needed.
-  pub fn parse(content: &Vec<u8>, uri: &str) -> String {
+  pub fn parse(content: &[u8], uri: &str) -> String {
     let mime = match infer::get(&content) {
       Some(info) => info.mime_type(),
       None => MIMETYPE_PLAIN,
@@ -114,7 +114,7 @@ mod tests {
     assert_eq!(rtf, String::from("application/rtf"));
 
     let svg: String = MimeType::parse_from_uri("https://example.com/picture.svg").to_string();
-    assert_eq!(svg, String::from("image/svg"));
+    assert_eq!(svg, String::from("image/svg+xml"));
 
     let custom_scheme = MimeType::parse_from_uri("wry://tauri.studio").to_string();
     assert_eq!(custom_scheme, String::from("text/html"));

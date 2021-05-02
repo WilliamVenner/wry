@@ -4,20 +4,22 @@
 
 use std::{path::PathBuf, rc::Rc};
 
-use gdk::RGBA;
+use gdk::{WindowEdge, WindowExt, RGBA};
 use gio::Cancellable;
-use glib::{Bytes, FileError};
-use gtk::{ApplicationWindow as Window, ContainerExt, WidgetExt};
+use glib::{signal::Inhibit, Bytes, FileError};
+use gtk::{ContainerExt, WidgetExt};
 use url::Url;
 use webkit2gtk::{
   SecurityManagerExt, SettingsExt, URISchemeRequestExt, UserContentInjectedFrames,
-  UserContentManager, UserContentManagerExt, UserScript, UserScriptInjectionTime, WebContext,
-  WebContextExt, WebView, WebViewExt, WebViewExtManual,
+  UserContentManager, UserContentManagerExt, UserScript, UserScriptInjectionTime,
+  WebContextBuilder, WebContextExt, WebView, WebViewExt, WebViewExtManual,
+  WebsiteDataManagerBuilder,
 };
 
 use crate::{
-  webview::{mimetype::MimeType, FileDropHandler},
-  Error, Result, RpcHandler,
+  application::window::Window,
+  webview::{mimetype::MimeType, FileDropEvent, RpcRequest, RpcResponse},
+  Error, Result,
 };
 
 mod file_drop;
@@ -27,31 +29,57 @@ pub struct InnerWebView {
 }
 
 impl InnerWebView {
-  pub fn new<F: 'static + Fn(&str) -> Result<Vec<u8>>>(
-    window: &Window,
+  pub fn new(
+    window: Rc<Window>,
     scripts: Vec<String>,
     url: Option<Url>,
     transparent: bool,
-    custom_protocols: Vec<(String, F)>,
-    rpc_handler: Option<RpcHandler>,
-    file_drop_handler: Option<FileDropHandler>,
-    _user_data_path: Option<PathBuf>,
+    custom_protocols: Vec<(
+      String,
+      Box<dyn Fn(&Window, &str) -> Result<Vec<u8>> + 'static>,
+    )>,
+    rpc_handler: Option<Box<dyn Fn(&Window, RpcRequest) -> Option<RpcResponse>>>,
+    file_drop_handler: Option<Box<dyn Fn(&Window, FileDropEvent) -> bool>>,
+    data_directory: Option<PathBuf>,
   ) -> Result<Self> {
+    let window_rc = Rc::clone(&window);
+    let window = &window.window;
     // Webview widget
     let manager = UserContentManager::new();
-    let context = WebContext::new();
+    let mut context_builder = WebContextBuilder::new();
+    if let Some(data_directory) = data_directory {
+      let data_manager = WebsiteDataManagerBuilder::new()
+        .local_storage_directory(
+          &data_directory
+            .join("localstorage")
+            .to_string_lossy()
+            .into_owned(),
+        )
+        .indexeddb_directory(
+          &data_directory
+            .join("databases")
+            .join("indexeddb")
+            .to_string_lossy()
+            .into_owned(),
+        )
+        .build();
+      context_builder = context_builder.website_data_manager(&data_manager);
+    }
+    let context = context_builder.build();
+
     let webview = Rc::new(WebView::new_with_context_and_user_content_manager(
       &context, &manager,
     ));
 
     // Message handler
     let wv = Rc::clone(&webview);
+    let w = window_rc.clone();
     manager.register_script_message_handler("external");
     manager.connect_script_message_received(move |_m, msg| {
       if let (Some(js), Some(context)) = (msg.get_value(), msg.get_global_context()) {
         if let Some(js) = js.to_string(&context) {
           if let Some(rpc_handler) = rpc_handler.as_ref() {
-            match super::rpc_proxy(js, rpc_handler) {
+            match super::rpc_proxy(&w, js, rpc_handler) {
               Ok(result) => {
                 if let Some(ref script) = result {
                   let cancellable: Option<&Cancellable> = None;
@@ -65,6 +93,21 @@ impl InnerWebView {
           }
         }
       }
+    });
+
+    webview.connect_button_press_event(|webview, event| {
+      if event.get_button() == 1 {
+        let (cx, cy) = event.get_root();
+        if let Some(window) = webview.get_parent_window() {
+          let result = crate::application::window::hit_test(&window, cx, cy);
+
+          // this check is necessary, otherwise the webview won't recieve the click properly when resize isn't needed
+          if result != WindowEdge::__Unknown(8) {
+            window.begin_resize_drag(result, 1, cx as i32, cy as i32, event.get_time());
+          }
+        }
+      }
+      Inhibit(false)
     });
 
     window.add(&*webview);
@@ -104,7 +147,7 @@ impl InnerWebView {
 
     // File drop handling
     if let Some(file_drop_handler) = file_drop_handler {
-      file_drop::connect_drag_event(webview.clone(), file_drop_handler);
+      file_drop::connect_drag_event(webview.clone(), window_rc.clone(), file_drop_handler);
     }
 
     if window.get_visible() {
@@ -125,11 +168,12 @@ impl InnerWebView {
         .get_security_manager()
         .ok_or(Error::MissingManager)?
         .register_uri_scheme_as_secure(&name);
+      let w = window_rc.clone();
       context.register_uri_scheme(&name.clone(), move |request| {
         if let Some(uri) = request.get_uri() {
           let uri = uri.as_str();
 
-          match handler(uri) {
+          match handler(&w, uri) {
             Ok(buffer) => {
               let mime = MimeType::parse(&buffer, uri);
               let input = gio::MemoryInputStream::from_bytes(&Bytes::from(&buffer));
