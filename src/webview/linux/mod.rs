@@ -6,8 +6,8 @@ use std::{path::PathBuf, rc::Rc};
 
 use gdk::{WindowEdge, WindowExt, RGBA};
 use gio::Cancellable;
-use glib::{signal::Inhibit, Bytes, FileError};
-use gtk::{ContainerExt, WidgetExt};
+use glib::{signal::Inhibit, Bytes, Cast, FileError};
+use gtk::{BoxExt, ContainerExt, WidgetExt};
 use url::Url;
 use webkit2gtk::{
   SecurityManagerExt, SettingsExt, URISchemeRequestExt, UserContentInjectedFrames,
@@ -17,7 +17,7 @@ use webkit2gtk::{
 };
 
 use crate::{
-  application::window::Window,
+  application::{platform::unix::*, window::Window},
   webview::{mimetype::MimeType, FileDropEvent, RpcRequest, RpcResponse},
   Error, Result,
 };
@@ -43,7 +43,7 @@ impl InnerWebView {
     data_directory: Option<PathBuf>,
   ) -> Result<Self> {
     let window_rc = Rc::clone(&window);
-    let window = &window.window;
+    let window = &window.gtk_window();
     // Webview widget
     let manager = UserContentManager::new();
     let mut context_builder = WebContextBuilder::new();
@@ -99,7 +99,7 @@ impl InnerWebView {
       if event.get_button() == 1 {
         let (cx, cy) = event.get_root();
         if let Some(window) = webview.get_parent_window() {
-          let result = crate::application::window::hit_test(&window, cx, cy);
+          let result = crate::application::platform::unix::hit_test(&window, cx, cy);
 
           // this check is necessary, otherwise the webview won't recieve the click properly when resize isn't needed
           if result != WindowEdge::__Unknown(8) {
@@ -110,7 +110,15 @@ impl InnerWebView {
       Inhibit(false)
     });
 
-    window.add(&*webview);
+    // Gtk application window can only contain one widget at a time.
+    // In tao, we add a gtk box if menu bar is required. So we check if
+    // there's a box widget here.
+    if let Some(widget) = window.get_children().pop() {
+      let vbox = widget.downcast::<gtk::Box>().unwrap();
+      vbox.pack_start(&*webview, true, true, 0);
+    } else {
+      window.add(&*webview);
+    }
     webview.grab_focus();
 
     // Enable webgl, webaudio, canvas features and others as default.
@@ -200,6 +208,9 @@ impl InnerWebView {
 
     Ok(w)
   }
+
+  // not supported yet
+  pub fn print(&self) {}
 
   pub fn eval(&self, js: &str) -> Result<()> {
     let cancellable: Option<&Cancellable> = None;

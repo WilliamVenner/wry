@@ -5,7 +5,7 @@
 //! Wry is a Cross-platform WebView rendering library.
 //!
 //! To build a Window with WebView embedded, we could use [`application`] module to create
-//! [`EventLoop`] and the window. It's a module that re-exports APIs from [winit]. Then
+//! [`EventLoop`] and the window. It's a module that re-exports APIs from [tao]. Then
 //! use [`webview`] module to create the [`WebView`] from the [`Window`]. Here's a minimum example
 //! showing how to create a hello world window and load the url to Tauri website.
 //!
@@ -29,7 +29,7 @@
 //!     .build()?;
 //!
 //!   event_loop.run(move |event, _, control_flow| {
-//!     *control_flow = ControlFlow::Poll;
+//!     *control_flow = ControlFlow::Wait;
 //!
 //!     match event {
 //!       Event::NewEvents(StartCause::Init) => println!("Wry has started!"),
@@ -45,19 +45,31 @@
 //!
 //! ## Feature flags
 //!
-//! Wry uses a set of feature flags to toggle several advanced features.
+//! Wry uses a set of feature flags to toggle several advanced features. `file-drop`, `protocol`,
+//! `menu`, and `win32` are enabled by default.
 //!
-//! - `file-drop`: Enable [`with_file_drop_handler`] to control the behaviour when there are files
+//! - `file-drop`: Enables [`with_file_drop_handler`] to control the behaviour when there are files
 //! interacting with the window.
-//! - `protocol`: Enable [`with_custom_protocol`] to define custom URL scheme for handling tasks like
+//! - `protocol`: Enables [`with_custom_protocol`] to define custom URL scheme for handling tasks like
 //! loading assets.
+//! - `menu`: Enables system tray and more menu item variants on **Linux**. You can still create
+//! those types if you disable it. They just don't create the actual objects. We set this flag
+//! because some implementations require more installed packages. Disable this if you don't want to
+//! install those additional packages.
+//! - `win32`: Enables purely Win32 APIs to build the WebView on **Windows**. This makes backward
+//! compatibility down to Windows 7 possible.
+//! - `winrt`: Enables up-to-date Windows Runtime support to build the WebView on **Windows**. WinRT
+//! is actively supported by Microsoft, so it's more efficient and less likely encoutered unexpected
+//! bugs.
+//! - `dox`: Enables this in `package.metadata.docs.rs` section to skip linking some **Linux**
+//! libraries and prevent from building documentation on doc.rs fails.
 //!
 //! ## Debug build
 //!
 //! Debug profile enables tools like inspector for development or debug usage. Note this will call
 //! private APIs on macOS.
 //!
-//! [winit]: https://crates.io/crates/winit
+//! [tao]: https://crates.io/crates/tao
 //! [`EventLoop`]: crate::application::event_loop::EventLoop
 //! [`Window`]: crate::application::window::Window
 //! [`WebView`]: crate::webview::WebView
@@ -71,9 +83,6 @@
 #![allow(clippy::unit_cmp)]
 #![allow(clippy::upper_case_acronyms)]
 
-#[cfg(target_os = "linux")]
-#[macro_use]
-extern crate bitflags;
 #[macro_use]
 extern crate serde;
 #[macro_use]
@@ -84,10 +93,10 @@ extern crate objc;
 
 use std::sync::mpsc::{RecvError, SendError};
 
+#[cfg(not(target_os = "linux"))]
+use crate::application::window::BadIcon;
 pub use serde_json::Value;
 use url::ParseError;
-#[cfg(not(target_os = "linux"))]
-use winit::window::BadIcon;
 
 pub mod application;
 pub mod webview;
